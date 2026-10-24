@@ -1,0 +1,60 @@
+name: offline_bridge
+description: "An offline local-first data transmission bridge over SMS with WAL and HLC sync."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Cupertino Icons
+  cupertino_icons: ^1.0.8
+
+  # SMS handling package
+  another_telephony: ^0.4.1
+
+  # Permission handling
+  permission_handler: ^11.3.1
+
+  # For launching external Google Maps
+  url_launcher: ^6.3.0
+
+  # Live GPS location
+  geolocator: ^12.0.0
+
+  # Audio player for emergency siren
+  flutter_ringtone_player: ^4.0.0+4
+
+  # WAL Persistence Engine & Local SQLite Database
+  sqflite: ^2.3.2
+  path: ^1.9.0
+
+  # 100% Offline Map Packages
+  flutter_map: ^7.0.2
+  flutter_map_mbtiles: ^1.0.4
+  latlong2: ^0.9.1
+  sqlite3_flutter_libs: ^0.5.20
+
+  # Supabase & Connectivity Packages
+  supabase_flutter: ^2.3.4
+  connectivity_plus: ^6.0.3
+  image_picker: ^1.1.2
+
+  # Offline Bluetooth & Wi-Fi Mesh Networking (P2P Cluster Relay)
+  nearby_connections: ^4.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - ml/mobile_assets/first_aid_mobile_model.json
