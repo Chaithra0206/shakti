@@ -55,6 +55,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-  assets:
-    - ml/mobile_assets/first_aid_mobile_model.json

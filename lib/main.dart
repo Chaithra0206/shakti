@@ -362,10 +362,11 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final Telephony telephony = Telephony.instance;
-  final FirstAidEngine _aiEngine = FirstAidEngine();
   final List<ParsedPacket> _packets = [];
+  final Set<String> _acceptedSessionIds = {};
   bool _permissionGranted = false;
   bool _isAlarmPlaying = false;
+  bool _sirenManuallyMuted = false;
   bool _showHistoryArchive = false;
   Hlc? _latestHlc;
 
@@ -388,7 +389,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _aiEngine.loadModel();
     BluetoothMeshService.instance.init(
       onMessageReceived: (sender, payload) {
         _handleIncomingMessage(sender, payload, isSentByMe: false);
@@ -408,15 +408,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _triggerCloudSync();
       }
     });
-  }
-
-  void _showFirstAidAiChatbot() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => FirstAidChatbotSheet(engine: _aiEngine),
-    );
   }
 
   @override
@@ -560,12 +551,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _checkActiveAlarms() {
+    if (_sirenManuallyMuted) {
+      if (_isAlarmPlaying) {
+        _stopSiren();
+      }
+      return;
+    }
+
     Map<String, List<ParsedPacket>> sessions = _groupPacketsBySession();
     bool hasPendingUnacceptedSos = false;
 
-    for (var sessionPackets in sessions.values) {
+    for (var entry in sessions.entries) {
+      String sId = entry.key;
+      var sessionPackets = entry.value;
       bool isRescued = sessionPackets.any((p) => p.type == 'RESCUED');
-      bool isAccepted = sessionPackets.any((p) => p.type == 'ACCEPT');
+      bool isAccepted = sessionPackets.any((p) => p.type == 'ACCEPT') || _acceptedSessionIds.contains(sId);
       bool isIncomingSOS = sessionPackets.any((p) => !p.isSentByMe && p.type == 'SOS');
 
       if (isIncomingSOS && !isAccepted && !isRescued) {
@@ -850,7 +850,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _handleIncomingMessage(String sender, String body, {required bool isSentByMe, String? localMediaPath}) async {
+  Future<void> _handleIncomingMessage(String sender, String body, {required bool isSentByMe, String? localMediaPath}) async {
     if (body.isEmpty || !isEmergencyProtocolMessage(body)) return;
 
     String cleanSender = normalizePhoneSender(sender);
@@ -882,6 +882,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     if (!isSentByMe && parsed.type == "SOS") {
+      _sirenManuallyMuted = false;
       _checkActiveAlarms();
     } else if (parsed.type == "RESCUED" || parsed.type == "ACCEPT") {
       _checkActiveAlarms();
@@ -898,13 +899,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _startSiren() {
+    _sirenManuallyMuted = false;
     setState(() => _isAlarmPlaying = true);
     FlutterRingtonePlayer().playAlarm(looping: true, asAlarm: true);
   }
 
-  void _stopSiren() {
-    FlutterRingtonePlayer().stop();
-    setState(() => _isAlarmPlaying = false);
+  void _stopSiren() async {
+    _sirenManuallyMuted = true;
+    try {
+      await FlutterRingtonePlayer().stop();
+    } catch (e) {
+      debugPrint("Error stopping siren: $e");
+    }
+    if (mounted) {
+      setState(() => _isAlarmPlaying = false);
+    }
   }
 
   void _showSetQuickNumberDialog() {
@@ -1157,20 +1166,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _acceptEmergencyMission(String senderPhone, String sessionId) async {
+    if (_acceptedSessionIds.contains(sessionId)) return;
+    _acceptedSessionIds.add(sessionId);
+
     _stopSiren();
 
-    Position? pos = await _getFreshCurrentLocation();
-    String myLat = pos != null ? pos.latitude.toStringAsFixed(6) : (_currentDeviceLat?.toStringAsFixed(6) ?? "0.0");
-    String myLng = pos != null ? pos.longitude.toStringAsFixed(6) : (_currentDeviceLng?.toStringAsFixed(6) ?? "0.0");
-
+    String myLat = _currentDeviceLat?.toStringAsFixed(6) ?? "0.0";
+    String myLng = _currentDeviceLng?.toStringAsFixed(6) ?? "0.0";
     String acceptPayload = "ACCEPT|$sessionId|$myLat|$myLng|Rescue Ambulance Dispatched";
 
-    await _broadcastEmergencyMessage(recipientPhone: senderPhone, payload: acceptPayload);
+    // Immediately record ACCEPT packet locally so WAL & UI are updated instantly on first click
+    await _handleIncomingMessage(
+      senderPhone.isNotEmpty ? senderPhone : "MESH_BROADCAST",
+      acceptPayload,
+      isSentByMe: true,
+    );
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Mission Accepted! Dispatched via Mesh & SMS.")),
       );
+    }
+
+    // Try fetching fresh GPS coordinates in the background (short timeout)
+    try {
+      Position? pos = await _getFreshCurrentLocation().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => null,
+      );
+      if (pos != null) {
+        myLat = pos.latitude.toStringAsFixed(6);
+        myLng = pos.longitude.toStringAsFixed(6);
+        acceptPayload = "ACCEPT|$sessionId|$myLat|$myLng|Rescue Ambulance Dispatched";
+      }
+    } catch (_) {}
+
+    // Broadcast across Bluetooth Mesh & Cellular SMS
+    await BluetoothMeshService.instance.broadcastPacket(
+      payload: acceptPayload,
+      senderPhone: senderPhone,
+    );
+
+    if (senderPhone.isNotEmpty && senderPhone != "0000000000") {
+      try {
+        await telephony.sendSms(to: senderPhone, message: acceptPayload);
+      } catch (e) {
+        debugPrint("Cellular SMS dispatch failed or no SIM network: $e");
+      }
     }
   }
 
@@ -1519,11 +1561,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const Text('OffGrid SOS'),
         actions: [
           IconButton(
-            tooltip: "Offline First Aid AI",
-            icon: const Icon(Icons.psychology, color: Colors.tealAccent),
-            onPressed: _showFirstAidAiChatbot,
-          ),
-          IconButton(
             tooltip: "Inspect WAL Store",
             icon: const Icon(Icons.bug_report, color: Colors.orangeAccent),
             onPressed: _showLocalWalDebugDialog,
@@ -1574,22 +1611,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
 
-            Row(
-              children: [
-                FloatingActionButton.extended(
-                  onPressed: _showFirstAidAiChatbot,
-                  backgroundColor: Colors.teal.shade700,
-                  icon: const Icon(Icons.psychology, color: Colors.white),
-                  label: const Text("First Aid AI", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-                const SizedBox(width: 8),
-                FloatingActionButton.extended(
-                  onPressed: _showSendPacketSheet,
-                  backgroundColor: Colors.redAccent,
-                  icon: const Icon(Icons.warning, color: Colors.white),
-                  label: const Text("Send SOS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-              ],
+            FloatingActionButton.extended(
+              onPressed: _showSendPacketSheet,
+              backgroundColor: Colors.redAccent,
+              icon: const Icon(Icons.warning, color: Colors.white),
+              label: const Text("Send SOS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
@@ -1803,7 +1829,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                       );
 
-                      bool hasAcceptance = thread.any((p) => p.type == "ACCEPT");
+                      bool hasAcceptance = thread.any((p) => p.type == "ACCEPT") || _acceptedSessionIds.contains(currentSessionId);
 
                       double distance = 0.0;
                       if (isSelfSentSOS && acceptPacket != null && acceptPacket.hasCoordinates) {
@@ -2680,730 +2706,5 @@ class ParsedPacket {
     var a = 0.5 - c((parsedLat - deviceLat) * p) / 2 +
         c(deviceLat * p) * c(parsedLat * p) * (1 - c((parsedLng - deviceLng) * p)) / 2;
     return 12742 * asin(sqrt(a));
-  }
-}
-
-// -----------------------------------------------------------------------------
-// 100% OFFLINE AI FIRST AID ASSISTANT ENGINE & CHATBOT UI
-// -----------------------------------------------------------------------------
-class EmergencyResponse {
-  final String emergencyType;
-  final String severityLevel;
-  final List<String> immediateActions;
-  final List<String> actionsToAvoid;
-  final List<String> emergencyCallIndicators;
-  final List<String> monitoringAdvice;
-  final String disclaimer;
-  final String? qaAnswer;
-
-  EmergencyResponse({
-    required this.emergencyType,
-    required this.severityLevel,
-    required this.immediateActions,
-    required this.actionsToAvoid,
-    required this.emergencyCallIndicators,
-    required this.monitoringAdvice,
-    required this.disclaimer,
-    this.qaAnswer,
-  });
-}
-
-class FirstAidEngine {
-  Map<String, dynamic>? _modelSpec;
-  bool isLoaded = false;
-  bool isLoading = false;
-
-  Future<void> loadModel() async {
-    if (isLoaded || isLoading) return;
-    isLoading = true;
-
-    final candidatePaths = [
-      'ml/mobile_assets/first_aid_mobile_model.json',
-      'assets/ml/mobile_assets/first_aid_mobile_model.json',
-      'mobile_assets/first_aid_mobile_model.json',
-    ];
-
-    for (final path in candidatePaths) {
-      try {
-        final jsonString = await rootBundle.loadString(path);
-        if (jsonString.isNotEmpty) {
-          _modelSpec = jsonDecode(jsonString);
-          isLoaded = true;
-          isLoading = false;
-          debugPrint("Offline AI First Aid Model loaded successfully from $path! Vocab size: ${_modelSpec?['vocabulary_size']}");
-          return;
-        }
-      } catch (e) {
-        debugPrint("Notice: Could not load asset from candidate path '$path': $e");
-      }
-    }
-
-    isLoading = false;
-    debugPrint("Error: Could not load offline First Aid AI model from any candidate path.");
-  }
-
-  String _preprocessQuery(String queryText) {
-    if (queryText.isEmpty) return "";
-    String q = queryText.toLowerCase();
-    q = q.replaceAll(RegExp(r'\bstomachpain\b'), 'stomach pain')
-         .replaceAll(RegExp(r'\bstomachache\b'), 'stomach ache')
-         .replaceAll(RegExp(r'\bbellyache\b'), 'belly ache')
-         .replaceAll(RegExp(r'\bdogbite\b'), 'dog bite')
-         .replaceAll(RegExp(r'\bcatbite\b'), 'cat bite')
-         .replaceAll(RegExp(r'\bsnakebite\b'), 'snake bite')
-         .replaceAll(RegExp(r'\bchestpain\b'), 'chest pain')
-         .replaceAll(RegExp(r'\bheadache\b'), 'head ache')
-         .replaceAll(RegExp(r'\bbackpain\b'), 'back pain');
-    return q.replaceAll(RegExp(r'[^a-z0-9\s]'), '');
-  }
-
-  EmergencyResponse? predict(String rawQuery) {
-    if (!isLoaded || _modelSpec == null) return null;
-
-    final String query = _preprocessQuery(rawQuery);
-    final List<String> tokens = query.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-    if (tokens.isEmpty) return null;
-
-    // 1. QA Index Similarity Search (1:1 with app.js)
-    double bestQaScore = 0.0;
-    Map<String, dynamic>? bestQaRecord;
-
-    if (_modelSpec!['qa_index'] != null) {
-      final qaIndex = Map<String, dynamic>.from(_modelSpec!['qa_index']);
-      final List qaRecords = qaIndex['qa_records'] ?? [];
-      final Map<String, dynamic> vocab = Map<String, dynamic>.from(qaIndex['vocabulary'] ?? {});
-      final List idfList = qaIndex['idf'] ?? [];
-
-      Map<String, int> queryTermCounts = {};
-      for (var t in tokens) {
-        queryTermCounts[t] = (queryTermCounts[t] ?? 0) + 1;
-      }
-
-      Map<int, double> queryVec = {};
-      double queryNorm = 0.0;
-      queryTermCounts.forEach((term, count) {
-        if (vocab.containsKey(term)) {
-          int idx = (vocab[term] as num).toInt();
-          double tf = 1.0 + log(count);
-          double idf = (idfList[idx] as num).toDouble();
-          double weight = tf * idf;
-          queryVec[idx] = weight;
-          queryNorm += weight * weight;
-        }
-      });
-      queryNorm = sqrt(queryNorm);
-
-      if (queryNorm > 0) {
-        for (var item in qaRecords) {
-          Map<String, dynamic> rec = Map<String, dynamic>.from(item);
-          String recQuestion = (rec['question'] ?? '').toString();
-          String cleanRecQ = recQuestion.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), '');
-          List<String> recTokens = cleanRecQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-
-          Map<String, int> recTermCounts = {};
-          for (var t in recTokens) {
-            recTermCounts[t] = (recTermCounts[t] ?? 0) + 1;
-          }
-
-          double dotProduct = 0.0;
-          double docNorm = 0.0;
-
-          recTermCounts.forEach((term, count) {
-            if (vocab.containsKey(term)) {
-              int idx = (vocab[term] as num).toInt();
-              double weight = (1.0 + log(count)) * (idfList[idx] as num).toDouble();
-              docNorm += weight * weight;
-              if (queryVec.containsKey(idx)) {
-                dotProduct += queryVec[idx]! * weight;
-              }
-            }
-          });
-          docNorm = sqrt(docNorm);
-
-          if (docNorm > 0) {
-            double cosSim = dotProduct / (queryNorm * docNorm);
-            if (cosSim > bestQaScore) {
-              bestQaScore = cosSim;
-              bestQaRecord = rec;
-            }
-          }
-        }
-      }
-    }
-
-    // 2. Classifier (Logistic Regression 1:1 with app.js)
-    final Map<String, dynamic> vocab = Map<String, dynamic>.from(_modelSpec!['vocabulary'] ?? {});
-    final List classes = _modelSpec!['classes'] ?? [];
-    final List coefs = _modelSpec!['coefficients'] ?? [];
-    final List intercepts = _modelSpec!['intercept'] ?? [];
-    final List idfList = _modelSpec!['idf'] ?? [];
-    final Map<String, dynamic> kb = Map<String, dynamic>.from(_modelSpec!['knowledge_base'] ?? {});
-
-    List<double> featureVector = List.filled(vocab.length, 0.0);
-    Map<String, int> termCounts = {};
-    for (var t in tokens) {
-      termCounts[t] = (termCounts[t] ?? 0) + 1;
-    }
-
-    termCounts.forEach((term, count) {
-      if (vocab.containsKey(term)) {
-        int idx = (vocab[term] as num).toInt();
-        if (idx < featureVector.length) {
-          double tf = count / tokens.length;
-          double idf = (idfList[idx] as num).toDouble();
-          featureVector[idx] = tf * idf;
-        }
-      }
-    });
-
-    double maxScore = -double.maxFinite;
-    int bestClassIndex = 0;
-
-    for (int c = 0; c < classes.length; c++) {
-      double score = (intercepts[c] as num).toDouble();
-      List classCoefs = coefs[c];
-      for (int i = 0; i < featureVector.length; i++) {
-        if (featureVector[i] != 0.0) {
-          score += featureVector[i] * (classCoefs[i] as num).toDouble();
-        }
-      }
-      if (score > maxScore) {
-        maxScore = score;
-        bestClassIndex = c;
-      }
-    }
-
-    String predictedCategory = classes[bestClassIndex].toString();
-    var kbEntry = kb[predictedCategory];
-    Map<String, dynamic>? entry = kbEntry != null ? Map<String, dynamic>.from(kbEntry) : null;
-
-    String? qaAnswer;
-    if (bestQaScore >= 0.15 && bestQaRecord != null) {
-      qaAnswer = bestQaRecord['answer'];
-      if (bestQaRecord['category'] != null &&
-          bestQaRecord['category'] != "Doctor QA" &&
-          bestQaRecord['category'] != "Clinical Consultation" &&
-          bestQaRecord['category'] != "First Aid QA") {
-        predictedCategory = bestQaRecord['category'];
-      }
-    }
-
-    return EmergencyResponse(
-      emergencyType: entry?['emergency_type'] ?? predictedCategory,
-      severityLevel: entry?['severity_level'] ?? 'Urgent',
-      immediateActions: List<String>.from(entry?['immediate_actions'] ?? []),
-      actionsToAvoid: List<String>.from(entry?['actions_to_avoid'] ?? []),
-      emergencyCallIndicators: List<String>.from(entry?['emergency_call_indicators'] ?? []),
-      monitoringAdvice: List<String>.from(entry?['monitoring_advice'] ?? []),
-      disclaimer: entry?['disclaimer'] ?? "DISCLAIMER: This tool provides emergency first aid guidance only.",
-      qaAnswer: qaAnswer,
-    );
-  }
-}
-
-class ChatMessage {
-  final String text;
-  final bool isUser;
-  final EmergencyResponse? response;
-
-  ChatMessage({required this.text, required this.isUser, this.response});
-}
-
-class FirstAidChatbotSheet extends StatefulWidget {
-  final FirstAidEngine engine;
-  const FirstAidChatbotSheet({super.key, required this.engine});
-
-  @override
-  State<FirstAidChatbotSheet> createState() => _FirstAidChatbotSheetState();
-}
-
-class _FirstAidChatbotSheetState extends State<FirstAidChatbotSheet> {
-  final TextEditingController _queryController = TextEditingController();
-  final List<ChatMessage> _messages = [];
-  final ScrollController _scrollController = ScrollController();
-
-  final List<Map<String, String>> _quickPills = [
-    {"label": "Snake Bite First Aid", "query": "My friend was bitten by a snake."},
-    {"label": "Choking Emergency", "query": "Someone is choking and cannot speak."},
-    {"label": "Heart Attack / Chest Pain", "query": "My father has severe chest pain."},
-    {"label": "Stomach Pain & Gastritis", "query": "Stomach pain and gastritis first aid."},
-    {"label": "CPR Steps", "query": "How do I perform CPR?"},
-    {"label": "Severe Bleeding", "query": "Severe bleeding first aid."},
-    {"label": "Dog Bite & Rabies", "query": "Dog bite first aid."},
-    {"label": "Burn First Aid", "query": "Burn first aid."},
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    if (!widget.engine.isLoaded) {
-      widget.engine.loadModel().then((_) {
-        if (mounted) setState(() {});
-      });
-    }
-    _messages.add(
-      ChatMessage(
-        text: "Hello! I am your 100% Offline AI Emergency First Aid Assistant covering 25 emergency categories. Describe what happened or select a topic below.",
-        isUser: false,
-      ),
-    );
-  }
-
-  void _handleSend([String? queryToRun, String? userDisplayLabel]) {
-    String query = queryToRun ?? _queryController.text.trim();
-    if (query.isEmpty) return;
-
-    String displayText = userDisplayLabel ?? query;
-
-    if (queryToRun == null) _queryController.clear();
-
-    setState(() {
-      _messages.add(ChatMessage(text: displayText, isUser: true));
-    });
-
-    final resp = widget.engine.predict(query);
-
-    setState(() {
-      if (resp != null) {
-        _messages.add(ChatMessage(text: "Emergency Guidance for: ${resp.emergencyType}", isUser: false, response: resp));
-      } else {
-        _messages.add(ChatMessage(
-          text: "I could not determine the exact emergency category. In any medical emergency, please stay calm and contact local emergency services (112 / 108 / 911) immediately.",
-          isUser: false,
-        ));
-      }
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.88,
-      decoration: const BoxDecoration(
-        color: Color(0xFF1E1E2C),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Column(
-        children: [
-          // Header Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: Color(0xFF2D2D44),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.psychology, color: Colors.tealAccent, size: 28),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "Offline First Aid AI",
-                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                      Row(
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: widget.engine.isLoaded ? Colors.greenAccent : Colors.orangeAccent,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            widget.engine.isLoaded ? "100% Offline Model Active" : "Loading Model...",
-                            style: TextStyle(
-                              color: widget.engine.isLoaded ? Colors.greenAccent : Colors.orangeAccent,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      )
-                    ],
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white70),
-                  onPressed: () => Navigator.pop(context),
-                )
-              ],
-            ),
-          ),
-
-          // Loading Banner if model loading
-          if (!widget.engine.isLoaded)
-            Container(
-              padding: const EdgeInsets.all(8),
-              color: Colors.orange.withValues(alpha: 0.2),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orangeAccent),
-                  ),
-                  SizedBox(width: 8),
-                  Text("Loading 100% Offline AI Engine... Please wait", style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-                ],
-              ),
-            ),
-
-          // Top Scrollable Quick Topic Chips
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: _quickPills.length,
-              itemBuilder: (ctx, idx) {
-                final pill = _quickPills[idx];
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ActionChip(
-                    label: Text(pill["label"]!, style: const TextStyle(fontSize: 12, color: Colors.white)),
-                    backgroundColor: const Color(0xFF3D3D5C),
-                    onPressed: () => _handleSend(pill["query"], pill["label"]),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          const Divider(height: 1, color: Colors.white12),
-
-          // Chat Messages
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(12),
-              itemCount: _messages.length,
-              itemBuilder: (ctx, idx) {
-                final msg = _messages[idx];
-                return _buildMessageBubble(msg, idx == 0);
-              },
-            ),
-          ),
-
-          // Input Bar
-          Container(
-            padding: EdgeInsets.only(
-              left: 12,
-              right: 12,
-              top: 8,
-              bottom: MediaQuery.of(context).viewInsets.bottom + 8,
-            ),
-            color: const Color(0xFF252538),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _queryController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: "Describe medical emergency...",
-                      hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-                      filled: true,
-                      fillColor: const Color(0xFF1E1E2C),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                    onSubmitted: (_) => _handleSend(),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  icon: const Icon(Icons.send_rounded, color: Colors.white),
-                  style: IconButton.styleFrom(backgroundColor: Colors.teal),
-                  onPressed: () => _handleSend(),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMessageBubble(ChatMessage msg, bool isInitialGreeting) {
-    if (msg.isUser) {
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.teal.shade700,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(16),
-              topRight: Radius.circular(16),
-              bottomLeft: Radius.circular(16),
-            ),
-          ),
-          child: Text(
-            msg.text,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-          ),
-        ),
-      );
-    }
-
-    if (isInitialGreeting) {
-      return Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2D2D44),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.teal.shade800),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(msg.text, style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.4)),
-            const SizedBox(height: 12),
-            const Text(
-              "Select an emergency topic:",
-              style: TextStyle(color: Colors.tealAccent, fontSize: 12, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Column(
-              children: _quickPills.take(5).map((pill) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: InkWell(
-                    onTap: () => _handleSend(pill["query"], pill["label"]),
-                    borderRadius: BorderRadius.circular(10),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF383854),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(pill["label"]!, style: const TextStyle(color: Colors.white, fontSize: 13)),
-                          const Icon(Icons.chevron_right, color: Colors.grey, size: 18),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            )
-          ],
-        ),
-      );
-    }
-
-    final resp = msg.response;
-    if (resp == null) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2D2D44),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(msg.text, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-        ),
-      );
-    }
-
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A3D),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.teal.shade700, width: 1.5),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header: Emergency Type & Severity
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    resp.emergencyType,
-                    style: const TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 15),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: resp.severityLevel.toLowerCase().contains("critical")
-                        ? Colors.red.withValues(alpha: 0.3)
-                        : Colors.orange.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: resp.severityLevel.toLowerCase().contains("critical") ? Colors.redAccent : Colors.orangeAccent,
-                    ),
-                  ),
-                  child: Text(
-                    resp.severityLevel.toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: resp.severityLevel.toLowerCase().contains("critical") ? Colors.redAccent : Colors.orangeAccent,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-
-            // Clinical QA Answer
-            if (resp.qaAnswer != null && resp.qaAnswer!.isNotEmpty) ...[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                margin: const EdgeInsets.only(bottom: 10),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.blue.shade400),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text("💬 CLINICAL QA ANSWER", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.lightBlueAccent)),
-                    const SizedBox(height: 6),
-                    Text(
-                      _formatMarkdownText(resp.qaAnswer!),
-                      style: const TextStyle(fontSize: 13, color: Colors.white, height: 1.4),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-
-            // Immediate Actions
-            if (resp.immediateActions.isNotEmpty) ...[
-              _buildSectionBox(
-                title: "⚡ IMMEDIATE ACTIONS TO PERFORM",
-                color: Colors.green,
-                accentColor: Colors.greenAccent,
-                items: resp.immediateActions,
-              ),
-              const SizedBox(height: 8),
-            ],
-
-            // Actions to Avoid
-            if (resp.actionsToAvoid.isNotEmpty) ...[
-              _buildSectionBox(
-                title: "🚫 ACTIONS TO AVOID",
-                color: Colors.red,
-                accentColor: Colors.redAccent,
-                items: resp.actionsToAvoid,
-              ),
-              const SizedBox(height: 8),
-            ],
-
-            // Call Emergency Services
-            if (resp.emergencyCallIndicators.isNotEmpty) ...[
-              _buildSectionBox(
-                title: "🚨 CALL 112 / 108 IMMEDIATELY IF",
-                color: Colors.amber,
-                accentColor: Colors.amberAccent,
-                items: resp.emergencyCallIndicators,
-              ),
-              const SizedBox(height: 8),
-            ],
-
-            // Monitoring Advice
-            if (resp.monitoringAdvice.isNotEmpty) ...[
-              _buildSectionBox(
-                title: "🩺 MONITORING ADVICE",
-                color: Colors.lightBlue,
-                accentColor: Colors.lightBlueAccent,
-                items: resp.monitoringAdvice,
-              ),
-              const SizedBox(height: 8),
-            ],
-
-            // Disclaimer
-            Text(
-              resp.disclaimer,
-              style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.grey.shade400),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _formatMarkdownText(String raw) {
-    return raw
-        .replaceAll(RegExp(r'###\s*'), '')
-        .replaceAll(RegExp(r'##\s*'), '')
-        .replaceAll(RegExp(r'#\s*'), '')
-        .replaceAll(RegExp(r'\*\*'), '')
-        .trim();
-  }
-
-  Widget _buildSectionBox({
-    required String title,
-    required MaterialColor color,
-    required Color accentColor,
-    required List<String> items,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.shade700),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: accentColor)),
-          const SizedBox(height: 4),
-          ...items.map(
-            (item) => Padding(
-              padding: const EdgeInsets.only(bottom: 3),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("• ", style: TextStyle(color: accentColor, fontWeight: FontWeight.bold)),
-                  Expanded(
-                    child: Text(_formatMarkdownText(item), style: const TextStyle(fontSize: 12, color: Colors.white70)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
