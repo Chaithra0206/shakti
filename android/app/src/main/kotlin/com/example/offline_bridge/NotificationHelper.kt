@@ -34,7 +34,7 @@ object NotificationHelper {
             manager.createNotificationChannel(channel)
         }
 
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         } else {
             PendingIntent.FLAG_UPDATE_CURRENT
@@ -42,25 +42,25 @@ object NotificationHelper {
 
         // Tap notification body -> Open app
         val contentIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        val contentPendingIntent = PendingIntent.getActivity(context, 2000, contentIntent, flags)
+        val contentPendingIntent = PendingIntent.getActivity(context, 2000, contentIntent, pendingIntentFlags)
 
         // Action 1: Send SOS
         val sosIntent = Intent(context, MainActivity::class.java).apply {
             action = SosWidgetProvider.ACTION_TRIGGER_SOS
             putExtra("action_type", "sos")
-            this.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        val sosPendingIntent = PendingIntent.getActivity(context, 2001, sosIntent, flags)
+        val sosPendingIntent = PendingIntent.getActivity(context, 2001, sosIntent, pendingIntentFlags)
 
         // Action 2: Siren
         val sirenIntent = Intent(context, MainActivity::class.java).apply {
             action = SosWidgetProvider.ACTION_TRIGGER_SIREN
             putExtra("action_type", "siren")
-            this.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        val sirenPendingIntent = PendingIntent.getActivity(context, 2002, sirenIntent, flags)
+        val sirenPendingIntent = PendingIntent.getActivity(context, 2002, sirenIntent, pendingIntentFlags)
 
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, CHANNEL_ID)
