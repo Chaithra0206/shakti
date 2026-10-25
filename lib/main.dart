@@ -407,7 +407,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _initEmergencyActionChannel();
     BluetoothMeshService.instance.init(
       onMessageReceived: (sender, payload) {
         _handleIncomingMessage(sender, payload, isSentByMe: false);
@@ -698,13 +697,87 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _getFreshCurrentLocation();
     }
 
-    try {
-      await _emergencyChannel.invokeMethod('showLockscreenNotification');
-    } catch (_) {}
+    if (statuses[Permission.notification]?.isGranted == true) {
+      try {
+        await _emergencyChannel.invokeMethod('showLockscreenNotification');
+      } catch (_) {}
+    } else {
+      _enforceMandatoryLockscreenWidget();
+    }
 
     // Auto-start decentralized Bluetooth Mesh (works offline without SIM or cellular)
     await BluetoothMeshService.instance.startMesh();
     if (mounted) setState(() {});
+  }
+
+  Future<void> _enforceMandatoryLockscreenWidget() async {
+    final status = await Permission.notification.status;
+    if (status.isGranted) {
+      try {
+        await _emergencyChannel.invokeMethod('showLockscreenNotification');
+      } catch (_) {}
+      return;
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.screen_lock_portrait, color: Colors.redAccent, size: 28),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "Mandatory Lock Screen SOS",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Lock Screen Widget Required For Emergency Safety",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              SizedBox(height: 8),
+              Text(
+                "The Lock Screen Emergency SOS Widget is mandatory. It enables 1-tap emergency dispatch and siren directly from your phone's lock screen without unlocking. Please grant notification permission to activate the lock screen widget.",
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final res = await Permission.notification.request();
+                if (res.isGranted) {
+                  try {
+                    await _emergencyChannel.invokeMethod('showLockscreenNotification');
+                  } catch (_) {}
+                } else if (res.isPermanentlyDenied) {
+                  await openAppSettings();
+                }
+              },
+              child: const Text("ACTIVATE LOCK SCREEN WIDGET"),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Multi-channel emergency broadcaster:
