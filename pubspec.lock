@@ -65,11 +65,27 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.2"
+  buffer:
+    dependency: transitive
+    description:
+      name: buffer
+      sha256: "389da2ec2c16283c8787e0adaede82b1842102f8c8aae2f49003a766c5c6b3d1"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.3"
   characters:
     dependency: transitive
     description:
       name: characters
       sha256: f71061c654a3380576a52b451dd5532377954cf9dbd272a78fc8479606670803
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.4.0"
+  charcode:
+    dependency: transitive
+    description:
+      name: charcode
+      sha256: fb0f1107cac15a5ea6ef0a6ef71a807b9e4267c713bb93e00e92d737cc8dbd8a
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
@@ -736,6 +752,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.1"
+  pool:
+    dependency: transitive
+    description:
+      name: pool
+      sha256: "4177f68c237ea2128d1bee66ac17b2ce05ba3dbaafcbdd54c5d40a39d0b6b11c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.5.3"
+  postgres:
+    dependency: "direct main"
+    description:
+      name: postgres
+      sha256: "013c6dc668eaab9771c4d3f5fc3e87ed4b3cd4ab3587ac6943cc1f38509ff723"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.5.7"
   postgrest:
     dependency: transitive
     description:
@@ -776,6 +808,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.28.0"
+  sasl_scram:
+    dependency: transitive
+    description:
+      name: sasl_scram
+      sha256: "5c27fd6058d53075c032539ba3cc7fa95006bb1d51a0db63a81b05756c265a83"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.2"
+  saslprep:
+    dependency: transitive
+    description:
+      name: saslprep
+      sha256: "3d421d10be9513bf4459c17c5e70e7b8bc718c9fc5ad4ba5eb4f5fd27396f740"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
   shared_preferences:
     dependency: transitive
     description:
@@ -989,6 +1037,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.1"
+  unorm_dart:
+    dependency: transitive
+    description:
+      name: unorm_dart
+      sha256: b4f4d2aff27d65a5fc37f400d4c09e55d7535359315acbe3b895a9add4de3a23
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.3"
   url_launcher:
     dependency: "direct main"
     description:

@@ -19,6 +19,7 @@ import 'package:flutter_map_mbtiles/flutter_map_mbtiles.dart';
 import 'package:mbtiles/mbtiles.dart';
 import 'package:sqflite/sqflite.dart';
 import 'services/bluetooth_mesh_service.dart';
+import 'services/neon_db_service.dart';
 
 // SUPABASE CONFIGURATION
 const String supabaseUrl = "https://cpqowlqxmruszognbzbn.supabase.co";
@@ -205,19 +206,35 @@ class LocalWalStore {
             final parts = payloadStr.split('|');
             String victimLoc = (parts.length >= 4 && (parts[0] == 'SOS' || parts[0] == 'ALT')) ? "${parts[2]}, ${parts[3]}" : "";
 
-            await supabase.from('emergency_wal_logs').upsert({
-              'hlc_timestamp': record['hlc'].toString(),
-              'sender': record['sender'].toString(),
-              'payload': payloadStr,
-              'status': currentStatus,
-              'victim_location': victimLoc.isNotEmpty ? victimLoc : null,
-            }, onConflict: 'hlc_timestamp');
+            // 1. Sync to Supabase
+            try {
+              await supabase.from('emergency_wal_logs').upsert({
+                'hlc_timestamp': record['hlc'].toString(),
+                'sender': record['sender'].toString(),
+                'payload': payloadStr,
+                'status': currentStatus,
+                'victim_location': victimLoc.isNotEmpty ? victimLoc : null,
+              }, onConflict: 'hlc_timestamp');
+            } catch (supaErr) {
+              debugPrint("Supabase sync notice: $supaErr");
+            }
+
+            // 2. Sync to Neon DB (if connection string is set)
+            if (NeonDbService.instance.isConfigured) {
+              await NeonDbService.instance.upsertRecord(
+                hlc: record['hlc'].toString(),
+                sender: record['sender'].toString(),
+                payload: payloadStr,
+                status: currentStatus,
+                victimLocation: victimLoc.isNotEmpty ? victimLoc : null,
+              );
+            }
 
             record['status'] = 'SYNCED';
             syncedCount++;
             hasChanges = true;
           } catch (e) {
-            debugPrint("Supabase sync row exception: $e");
+            debugPrint("Sync row exception: $e");
           }
         }
       }

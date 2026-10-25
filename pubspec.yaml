@@ -44,6 +44,9 @@ dependencies:
   connectivity_plus: ^6.0.3
   image_picker: ^1.1.2
 
+  # Neon PostgreSQL Serverless DB
+  postgres: ^3.1.2
+
   # Offline Bluetooth & Wi-Fi Mesh Networking (P2P Cluster Relay)
   nearby_connections: ^4.3.0
 

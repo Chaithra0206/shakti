@@ -31,3 +31,8 @@ __pycache__/
 ml/*
 !ml/mobile_assets/
 !ml/mobile_assets/first_aid_mobile_model.json
+
+# Local secrets & credentials (NEVER commit to GitHub)
+lib/config/secrets.dart
+*.env
+secrets.json
