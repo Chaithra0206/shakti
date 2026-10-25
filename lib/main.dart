@@ -378,6 +378,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  static const MethodChannel _emergencyActionChannel = MethodChannel('com.example.offline_bridge/emergency_actions');
   final Telephony telephony = Telephony.instance;
   final List<ParsedPacket> _packets = [];
   final Set<String> _acceptedSessionIds = {};
@@ -406,6 +407,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _initEmergencyActionChannel();
     BluetoothMeshService.instance.init(
       onMessageReceived: (sender, payload) {
         _handleIncomingMessage(sender, payload, isSentByMe: false);
@@ -612,6 +614,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       Permission.bluetoothAdvertise,
       Permission.bluetoothConnect,
       Permission.nearbyWifiDevices,
+      Permission.notification,
     ].request();
 
     if (statuses[Permission.sms]?.isGranted == true) {
@@ -620,6 +623,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _startGpsStream(isHighPrecision: true);
       _getFreshCurrentLocation();
     }
+
+    try {
+      await _emergencyActionChannel.invokeMethod('showLockscreenNotification');
+    } catch (_) {}
 
     // Auto-start decentralized Bluetooth Mesh (works offline without SIM or cellular)
     await BluetoothMeshService.instance.startMesh();
@@ -994,6 +1001,282 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  void _initEmergencyActionChannel() {
+    _emergencyActionChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onEmergencyTrigger') {
+        final action = call.arguments as String?;
+        if (action != null) {
+          _handleLockscreenEmergencyAction(action);
+        }
+      }
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final initialAction = await _emergencyActionChannel.invokeMethod<String>('getInitialAction');
+        if (initialAction != null && initialAction.isNotEmpty) {
+          _handleLockscreenEmergencyAction(initialAction);
+        }
+      } catch (e) {
+        debugPrint("Error checking initial emergency action: $e");
+      }
+    });
+  }
+
+  void _handleLockscreenEmergencyAction(String action) {
+    if (action == 'sos') {
+      debugPrint("🚨 Emergency SOS triggered from Lock Screen Widget/Notification!");
+      _dispatchQuickSosPayload();
+    } else if (action == 'siren') {
+      debugPrint("🔊 Siren triggered from Lock Screen Widget/Notification!");
+      _startSiren();
+    }
+  }
+
+  Future<void> _pinLockscreenSosWidget() async {
+    try {
+      final bool? success = await _emergencyActionChannel.invokeMethod<bool>('pinSosWidget');
+      if (mounted) {
+        if (success == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("✅ SOS Widget pin requested! Confirm on your home/lock screen."),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("ℹ️ Long-press your home/lock screen and select 'Shakti SOS' from Widgets list."),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Widget pin notice: $e")),
+        );
+      }
+    }
+  }
+
+  Future<void> _refreshLockscreenNotification() async {
+    try {
+      await _emergencyActionChannel.invokeMethod('showLockscreenNotification');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("🔔 Lock Screen SOS Notification refreshed & active!"),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error refreshing lockscreen notification: $e");
+    }
+  }
+
+  void _showLockScreenWidgetDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2C),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.screen_lock_portrait, color: Colors.redAccent, size: 28),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                "Lock Screen SOS & Widgets",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.shield, color: Colors.redAccent, size: 22),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Trigger emergency alerts & siren directly from your lock screen without unlocking your phone!",
+                        style: TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text("HOW TO ACCESS SOS ON LOCK SCREEN:", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+              const SizedBox(height: 10),
+
+              // Feature 1: Lock Screen / Home AppWidget
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.widgets, color: Colors.orangeAccent, size: 20),
+                        SizedBox(width: 8),
+                        Text("1. Lock & Home Screen Widget", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      "Place the 1-Tap SOS + Siren widget on your home or supported lock screen (Keyguard / Samsung OneUI / Glanceable Hub).",
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        icon: const Icon(Icons.add_to_home_screen, size: 18),
+                        label: const Text("Pin SOS Widget to Screen", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _pinLockscreenSosWidget();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Feature 2: Persistent Lock Screen Notification
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.notifications_active, color: Colors.redAccent, size: 20),
+                        SizedBox(width: 8),
+                        Text("2. Persistent Lock Screen Notification", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      "Always available on your lock screen notification shade with direct [🚨 SEND SOS] and [🔊 SIREN] action buttons. Launches over lock screen.",
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Colors.redAccent),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: const Text("Activate / Refresh Notification", style: TextStyle(fontSize: 12)),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _refreshLockscreenNotification();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Feature 3: Quick Settings Tile
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.swipe_down_rounded, color: Colors.cyanAccent, size: 20),
+                        SizedBox(width: 8),
+                        Text("3. Quick Settings Pull-Down Tile", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
+                      ],
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      "Swipe down from top on lock screen -> tap edit pencil/tiles -> add '🚨 Quick SOS' tile to trigger alerts anytime.",
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Contact configuration info
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      "Target Contact: ${_presetQuickNumber.isEmpty ? 'None (Mesh Broadcast Only)' : _presetQuickNumber}",
+                      style: const TextStyle(fontSize: 11, color: Colors.white60),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showSetQuickNumberDialog();
+                    },
+                    child: const Text("Edit Contact", style: TextStyle(fontSize: 12, color: Colors.cyanAccent)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Close", style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _triggerQuickSosBubbleTap() {
     if (_presetQuickNumber.isEmpty) {
       _showSetQuickNumberDialog();
@@ -1096,8 +1379,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _broadcastEmergencyMessage(recipientPhone: _presetQuickNumber, payload: payload);
 
     if (mounted) {
+      final targetDesc = _presetQuickNumber.isNotEmpty ? _presetQuickNumber : "ALL Nearby Mesh Peers";
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("⚡ QUICK SOS BROADCASTED (Mesh & SMS Fallback Active) to $_presetQuickNumber ($latStr, $longStr)")),
+        SnackBar(content: Text("⚡ QUICK SOS BROADCASTED (Mesh & SMS Fallback Active) to $targetDesc ($latStr, $longStr)")),
       );
     }
   }
@@ -1577,6 +1861,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         title: const Text('OffGrid SOS'),
         actions: [
+          IconButton(
+            tooltip: "Lock Screen & Widgets",
+            icon: const Icon(Icons.screen_lock_portrait, color: Colors.amberAccent),
+            onPressed: _showLockScreenWidgetDialog,
+          ),
           IconButton(
             tooltip: "Inspect WAL Store",
             icon: const Icon(Icons.bug_report, color: Colors.orangeAccent),
