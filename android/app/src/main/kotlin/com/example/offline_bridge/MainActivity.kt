@@ -31,7 +31,8 @@ class MainActivity : FlutterActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Show persistent lockscreen notification
+        // Start persistent lock screen emergency SOS service
+        SosLockscreenService.start(applicationContext)
         NotificationHelper.showLockscreenSosNotification(applicationContext)
 
         extractActionFromIntent(intent)
@@ -54,6 +55,7 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "showLockscreenNotification" -> {
+                    SosLockscreenService.start(applicationContext)
                     NotificationHelper.showLockscreenSosNotification(applicationContext)
                     result.success(true)
                 }

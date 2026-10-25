@@ -8,28 +8,30 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Build
+import android.widget.RemoteViews
 
 object NotificationHelper {
 
-    private const val CHANNEL_ID = "emergency_sos_channel"
-    private const val CHANNEL_NAME = "🚨 Emergency SOS Service"
-    private const val NOTIFICATION_ID = 9991
+    const val CHANNEL_ID = "emergency_sos_channel"
+    const val CHANNEL_NAME = "🚨 Emergency SOS Lock Screen Widget"
+    const val NOTIFICATION_ID = 9991
 
-    fun showLockscreenSosNotification(context: Context) {
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+    fun buildLockscreenSosNotification(context: Context): Notification {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager != null) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Quick emergency actions visible on lockscreen"
+                description = "Always-on 1-Tap SOS and Siren widget on lock screen"
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 enableLights(true)
                 lightColor = Color.RED
                 enableVibration(false)
                 setShowBadge(false)
+                setSound(null, null)
             }
             manager.createNotificationChannel(channel)
         }
@@ -69,16 +71,30 @@ object NotificationHelper {
             Notification.Builder(context)
         }
 
+        // Custom Widget-style RemoteViews layout for Lock Screen
+        val widgetView = RemoteViews(context.packageName, R.layout.sos_widget)
+        widgetView.setOnClickPendingIntent(R.id.btn_sos_widget, sosPendingIntent)
+        widgetView.setOnClickPendingIntent(R.id.btn_siren_widget, sirenPendingIntent)
+
         builder.setSmallIcon(R.drawable.ic_sos_tile)
-            .setContentTitle("🚨 Shakti Offline SOS Bridge")
-            .setContentText("Emergency Fast Access: Tap to broadcast SOS or trigger siren")
+            .setContentTitle("🚨 SHAKTI EMERGENCY SOS")
+            .setContentText("Direct Lock Screen Fast Access: Tap [SEND SOS] or [SIREN]")
             .setContentIntent(contentPendingIntent)
             .setOngoing(true)
             .setAutoCancel(false)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setPriority(Notification.PRIORITY_MAX)
 
-        // Add 1-tap lockscreen action buttons
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            builder.setCategory(Notification.CATEGORY_ALARM)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            builder.setCustomBigContentView(widgetView)
+            builder.setCustomContentView(widgetView)
+        }
+
+        // Standard 1-tap lockscreen action buttons fallback
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val sosAction = Notification.Action.Builder(
                 null,
@@ -101,8 +117,14 @@ object NotificationHelper {
             builder.addAction(R.drawable.ic_sos_tile, "🔊 SIREN", sirenPendingIntent)
         }
 
+        return builder.build()
+    }
+
+    fun showLockscreenSosNotification(context: Context) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         try {
-            manager.notify(NOTIFICATION_ID, builder.build())
+            val notification = buildLockscreenSosNotification(context)
+            manager.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {
             e.printStackTrace()
         }

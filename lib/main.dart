@@ -378,7 +378,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  static const MethodChannel _emergencyActionChannel = MethodChannel('com.example.offline_bridge/emergency_actions');
+  static const MethodChannel _emergencyChannel = MethodChannel('com.example.offline_bridge/emergency_actions');
   final Telephony telephony = Telephony.instance;
   final List<ParsedPacket> _packets = [];
   final Set<String> _acceptedSessionIds = {};
@@ -447,8 +447,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mounted) setState(() => _presetQuickNumber = num);
   }
 
-  static const MethodChannel _emergencyChannel = MethodChannel('com.example.offline_bridge/emergency_actions');
-
   void _initNativeEmergencyActions() {
     _emergencyChannel.setMethodCallHandler((call) async {
       if (call.method == "onEmergencyTrigger") {
@@ -459,8 +457,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     });
 
-    // Handle cold-start intent triggers from widget, quick tile, or lockscreen notification
+    // Auto-mount lockscreen emergency widget and handle cold-start intent triggers
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await _emergencyChannel.invokeMethod('showLockscreenNotification');
+      } catch (e) {
+        debugPrint("Error auto-activating lock screen SOS widget: $e");
+      }
       try {
         final String? initialAction = await _emergencyChannel.invokeMethod<String>('getInitialAction');
         if (initialAction != null && initialAction.isNotEmpty) {
@@ -696,7 +699,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     try {
-      await _emergencyActionChannel.invokeMethod('showLockscreenNotification');
+      await _emergencyChannel.invokeMethod('showLockscreenNotification');
     } catch (_) {}
 
     // Auto-start decentralized Bluetooth Mesh (works offline without SIM or cellular)
@@ -1079,53 +1082,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _initEmergencyActionChannel() {
-    _emergencyActionChannel.setMethodCallHandler((call) async {
-      if (call.method == 'onEmergencyTrigger') {
-        final action = call.arguments as String?;
-        if (action != null) {
-          _handleLockscreenEmergencyAction(action);
-        }
-      }
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      try {
-        final initialAction = await _emergencyActionChannel.invokeMethod<String>('getInitialAction');
-        if (initialAction != null && initialAction.isNotEmpty) {
-          _handleLockscreenEmergencyAction(initialAction);
-        }
-      } catch (e) {
-        debugPrint("Error checking initial emergency action: $e");
-      }
-    });
-  }
-
-  void _handleLockscreenEmergencyAction(String action) {
-    if (action == 'sos') {
-      debugPrint("🚨 Emergency SOS triggered from Lock Screen Widget/Notification!");
-      _dispatchQuickSosPayload();
-    } else if (action == 'siren') {
-      debugPrint("🔊 Siren triggered from Lock Screen Widget/Notification!");
-      _startSiren();
-    }
-  }
-
   Future<void> _pinLockscreenSosWidget() async {
     try {
-      final bool? success = await _emergencyActionChannel.invokeMethod<bool>('pinSosWidget');
+      final bool? success = await _emergencyChannel.invokeMethod<bool>('pinSosWidget');
       if (mounted) {
         if (success == true) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("✅ SOS Widget pin requested! Confirm on your home/lock screen."),
+              content: Text("✅ SOS Widget pin requested! Confirm on your screen."),
               backgroundColor: Colors.green,
             ),
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("ℹ️ Long-press your home/lock screen and select 'Shakti SOS' from Widgets list."),
+              content: Text("ℹ️ Lock screen widget is already active automatically! You can also add home screen widget via launcher menu."),
               duration: Duration(seconds: 4),
             ),
           );
@@ -1142,11 +1113,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refreshLockscreenNotification() async {
     try {
-      await _emergencyActionChannel.invokeMethod('showLockscreenNotification');
+      await _emergencyChannel.invokeMethod('showLockscreenNotification');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("🔔 Lock Screen SOS Notification refreshed & active!"),
+            content: Text("🔔 Lock Screen SOS Widget active & updated!"),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -2010,6 +1981,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Direct Lock Screen Emergency SOS Widget Indicator
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              margin: const EdgeInsets.only(bottom: 8),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.redAccent.withValues(alpha: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.screen_lock_portrait, size: 16, color: Colors.redAccent),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      "🔒 Lock Screen SOS Widget: Directly Active on Your Lock Screen",
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _showLockScreenWidgetDialog,
+                    child: const Text("Info", style: TextStyle(fontSize: 11, color: Colors.redAccent)),
+                  ),
+                ],
+              ),
+            ),
+
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               margin: const EdgeInsets.only(bottom: 8),
