@@ -117,7 +117,9 @@ object NotificationHelper {
             builder.addAction(R.drawable.ic_sos_tile, "🔊 SIREN", sirenPendingIntent)
         }
 
-        return builder.build()
+        val notification = builder.build()
+        notification.flags = notification.flags or Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR
+        return notification
     }
 
     fun showLockscreenSosNotification(context: Context) {
