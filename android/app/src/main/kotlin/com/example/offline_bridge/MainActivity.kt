@@ -49,13 +49,6 @@ class MainActivity : FlutterActivity() {
         dispatchPendingActionIfReady()
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Mandatorily enforce that lockscreen SOS widget service is active
-        SosLockscreenService.start(applicationContext)
-        NotificationHelper.showLockscreenSosNotification(applicationContext)
-    }
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
