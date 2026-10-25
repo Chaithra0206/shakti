@@ -421,6 +421,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadPresetQuickNumber();
     _initConnectivityListener();
     _initRealtimeListeners();
+    _initNativeEmergencyActions();
 
     _autoSyncTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (_isOnline) {
@@ -444,6 +445,76 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _loadPresetQuickNumber() async {
     String num = await LocalWalStore.getQuickSosNumber();
     if (mounted) setState(() => _presetQuickNumber = num);
+  }
+
+  static const MethodChannel _emergencyChannel = MethodChannel('com.example.offline_bridge/emergency_actions');
+
+  void _initNativeEmergencyActions() {
+    _emergencyChannel.setMethodCallHandler((call) async {
+      if (call.method == "onEmergencyTrigger") {
+        final action = call.arguments as String?;
+        if (action != null) {
+          _handleEmergencyAction(action);
+        }
+      }
+    });
+
+    // Handle cold-start intent triggers from widget, quick tile, or lockscreen notification
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final String? initialAction = await _emergencyChannel.invokeMethod<String>('getInitialAction');
+        if (initialAction != null && initialAction.isNotEmpty) {
+          _handleEmergencyAction(initialAction);
+        }
+      } catch (e) {
+        debugPrint("Error checking initial emergency action: $e");
+      }
+    });
+  }
+
+  Future<void> _handleEmergencyAction(String action) async {
+    debugPrint("🚨 Received Native Emergency Action: $action");
+    if (action == 'sos') {
+      if (_presetQuickNumber.isEmpty) {
+        _presetQuickNumber = await LocalWalStore.getQuickSosNumber();
+      }
+      _dispatchQuickSosPayload();
+    } else if (action == 'siren') {
+      if (_isAlarmPlaying) {
+        _stopSiren();
+      } else {
+        _startSiren();
+      }
+    }
+  }
+
+  Future<void> _pinSosWidget() async {
+    try {
+      final bool? success = await _emergencyChannel.invokeMethod<bool>('pinSosWidget');
+      if (mounted) {
+        if (success == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              backgroundColor: Colors.green,
+              content: Text("📌 SOS Widget pinning requested! Check your home screen to place it."),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              backgroundColor: Colors.orange,
+              content: Text("ℹ️ Automatic pinning not supported. You can add the 'SHAKTI SOS' widget manually from your home screen widget menu."),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Widget pinning error: $e")),
+        );
+      }
+    }
   }
 
   void _initRealtimeListeners() {
@@ -971,8 +1042,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               decoration: const InputDecoration(
                 labelText: "Emergency Phone Number",
                 prefixIcon: Icon(Icons.phone),
-                border: OutlineInputBorder(),
               ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () {
+                _pinSosWidget();
+              },
+              icon: const Icon(Icons.widgets, size: 16, color: Colors.cyanAccent),
+              label: const Text("Pin SOS Widget to Home Screen", style: TextStyle(fontSize: 12, color: Colors.cyanAccent)),
             ),
           ],
         ),
