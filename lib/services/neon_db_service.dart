@@ -3,8 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'package:postgres/postgres.dart';
 import '../config/secrets.dart';
 
-// The actual connection string is securely loaded from lib/config/secrets.dart
-// which is ignored by Git, ensuring your credentials are NEVER pushed to GitHub.
+// Check if passed via --dart-define=NEON_DB_URL=... (e.g. from GitHub Actions CI/CD)
+// otherwise fall back to lib/config/secrets.dart
+const String _envNeonString = String.fromEnvironment('NEON_DB_URL');
+String get effectiveNeonConnectionString =>
+    _envNeonString.isNotEmpty ? _envNeonString : neonConnectionString;
 
 class NeonDbService {
   NeonDbService._internal();
@@ -13,11 +16,11 @@ class NeonDbService {
   Connection? _connection;
   bool _isConnecting = false;
 
-  /// Check if the user has replaced the default placeholder string
+  /// Check if the user has configured a valid Neon connection string
   bool get isConfigured =>
-      neonConnectionString.isNotEmpty &&
-      !neonConnectionString.contains("PASTE_YOUR_NEON_CONNECTION_STRING_HERE") &&
-      neonConnectionString.startsWith("postgres");
+      effectiveNeonConnectionString.isNotEmpty &&
+      !effectiveNeonConnectionString.contains("PASTE_YOUR_NEON_CONNECTION_STRING_HERE") &&
+      effectiveNeonConnectionString.startsWith("postgres");
 
   /// Parse the connection string into an Endpoint
   Endpoint? _parseConnectionString(String connStr) {
@@ -73,7 +76,7 @@ class NeonDbService {
 
     _isConnecting = true;
     try {
-      final endpoint = _parseConnectionString(neonConnectionString);
+      final endpoint = _parseConnectionString(effectiveNeonConnectionString);
       if (endpoint == null) {
         _isConnecting = false;
         return null;

@@ -33,8 +33,22 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
+      - name: Prepare Secrets Configuration
+        run: |
+          mkdir -p lib/config
+          if [ ! -f lib/config/secrets.dart ]; then
+            cp lib/config/secrets.example.dart lib/config/secrets.dart
+          fi
+
       - name: Build Release APK
-        run: flutter build apk --release
+        env:
+          NEON_DB_URL: ${{ secrets.NEON_DB_URL }}
+        run: |
+          if [ -n "$NEON_DB_URL" ]; then
+            flutter build apk --release --dart-define=NEON_DB_URL="$NEON_DB_URL"
+          else
+            flutter build apk --release
+          fi
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
