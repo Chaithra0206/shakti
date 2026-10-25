@@ -101,6 +101,10 @@ object NotificationHelper {
             builder.addAction(R.drawable.ic_sos_tile, "🔊 SIREN", sirenPendingIntent)
         }
 
-        manager.notify(NOTIFICATION_ID, builder.build())
+        try {
+            manager.notify(NOTIFICATION_ID, builder.build())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }
